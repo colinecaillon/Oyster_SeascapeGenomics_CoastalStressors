@@ -18,7 +18,7 @@ cp ../RISG_SNP_Filtering_working/popmap .
 ```
 
 I am going to combine three methods to detect outliers:
-- PCAdapt: assumption-light; detects outliers associated with genetic structure, but may overidentify candidates
+- PCAdapt: assumption-light; detects outliers associated with genetic structure, but may over-identify candidates
 - OutFLANK: more stringent; identifies outliers based on Fst differentiation
 - LFMM: best suited for genotype–environment associations, while accounting for population structure.
 (BayeScan not used as old Fst-based method; generally less powerful than other approaches)
@@ -137,6 +137,7 @@ I'm going to use the default values for window size and r2 threshold for pcadapt
 However I still see these two strong LD regions in PC2, and now also in PC4 -> I will modify parameters of SNP thinning.
 - size = window size -> the number of SNPs considered around each SNP, not a physical distance in bp (size = 500 more aggressive genomic thinning if strong/long-range LD).
 - thr = r² threshold -> SNPs with LD above this threshold are thinned so that highly correlated markers don't disproportionately influence PCA (thr = 0.05 very stringent if strong LD or very dense data).
+
 It's better to increase the size value until the clusters disappear from PC loadings (these inversion regions are large), because a thr = 0.1 is already very low.
 
 ```{r}
@@ -146,9 +147,15 @@ plot(res, option = "screeplot")
 ```
 
 After SNP thinning, we choose K = 4.
+Size = 5000 -> we still see the cluster regions in PC2 loadings.
+Size = 7500 -> we still see the cluster regions in PC2 loadings.
+Size = 10000 -> we still see the cluster regions in PC2 loadings (still smaller than the inversion region).
+Size = 20000 -> we still see the cluster regions in PC2 loadings.
+Size = 50000 -> we still see the cluster regions in PC2 loadings.
+Size = 100000 -> we still see the cluster regions in PC2 loadings.
 
 ```{r}
-res <- pcadapt(filename, K = 4, LD.clumping = list(size = 5000, thr = 0.1))
+res <- pcadapt(filename, K = 4, LD.clumping = list(size = 20000, thr = 0.1))
 par(mfrow = c(2, 2))
 for (i in 1:4)
   plot(res$loadings[, i], pch = 19, cex = .3, ylab = paste0("Loadings PC", i))
@@ -170,6 +177,8 @@ plot(res, option = "manhattan")
 res$singular.values
 ```
 
+Save outliers
+
 Choosing a cutoff for outlier detection
 We can be more strict here with alpha = 0.05 as PCAdapt has less assumptions and overpick outliers 
 ```{r}
@@ -181,7 +190,6 @@ alpha <- 0.05 #expected false discovery rate lower than 5%
 # Save outliers
 pcadapt.outliers <- which(qval < alpha)
 length(pcadapt.outliers)
-
 ```
 
 
