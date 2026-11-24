@@ -205,7 +205,7 @@ After LD-thinning:
 Size 5000 / thr 0.1 =  6262 outliers
 Size 10000 / thr 0.1 = 5782
 Size 20000 / thr 0.1 = 5830
-Size 5000 / thr 0.05 = 4407
+Size 5000 / thr 0.05 = 4407 -> good one, having the smallest size and higher thr to get rid of the clusters in PC loadings. 
 Size 10000 / thr 0.05 = 4045
 Size 20000 / thr 0.05 = 4062
 
@@ -221,9 +221,12 @@ cd /home/ccaillon/RISG_dDocent_working/RISG_Outlier_Detection_working
 cat  outliers_pcadapt_thinned.txt | parallel "grep -w ^{} loci1.plus.index" | cut -f2,3> outliers_pcadapt_thinned.loci.txt
 
 ```
+list of file with all chromosomes and position -> look where i can make that one.
 
 
 ## 2. OutFLANK
+
+https://htmlpreview.github.io/?https://github.com/whitlock/OutFLANK/blob/master/inst/doc/OutFLANKAnalysis.html
 
 ```{r}
 # Load all necessary packages
@@ -312,7 +315,7 @@ chrom1 <- as.integer(chrom_new)
 ```
 
 ```{r}
-#chromosome and position need to be sorted for imputation to work.
+# Chromosome and position need to be sorted for imputation to work.
 chrom_sort <- sort(chrom1)
 pos_sort <- sort(position)
 ```
@@ -331,6 +334,7 @@ G_missSimple <- snp_fastImputeSimple(G1,method = "mode")
 
 ```{r}
 newpc <- snp_autoSVD(G_missSimple, infos.chr = chrom_sort,infos.pos = pos_sort)
+# LD pruning = removes SNPs in high linkage disequilibrium with each other. The pruning is important for OutFLANK because correlated SNPs violate the assumption of independence.
 which_pruned <- attr(newpc, which="subset") # Indexes of remaining SNPS after pruning
 length(which_pruned)
 ```
@@ -338,9 +342,9 @@ length(which_pruned)
 ### Run the OutFLANK() function to estimate the parameters on the neutral FST distribution.
 
 ```{r}
-out_trim <- OutFLANK(FST_OutFLANK[which_pruned,], NumberOfSamples = 239, qthreshold = 0.05, Hmin = 0.1)
+out_trim <- OutFLANK(FST_OutFLANK[which_pruned,], NumberOfSamples = 15, qthreshold = 0.05, Hmin = 0.1)
 str(out_trim)
-# NumberOfSamples = number of populations? or individuals?
+# NumberOfSamples = number of populations
 ```
 
 ```{r}
@@ -366,7 +370,7 @@ The bump at p ≈ 1 is a red flag -> it means many SNPs have extremely high p-va
 
 ```{r}
 # Using estimated neutral mean FST and df to calculate P-values for all loci
-P1 <- pOutlierFinderChiSqNoCorr(my_fst, Fstbar = out_trim$FSTNoCorrbar, dfInferred = out_trim$dfInferred, qthreshold = 0.05, Hmin=0.1)
+P1 <- pOutlierFinderChiSqNoCorr(FST_OutFLANK, Fstbar = out_trim$FSTNoCorrbar, dfInferred = out_trim$dfInferred, qthreshold = 0.05, Hmin=0.1)
 ```
 
 ```{r}
