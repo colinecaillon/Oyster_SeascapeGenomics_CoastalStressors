@@ -142,7 +142,7 @@ It's better to increase the size value until the clusters disappear from PC load
 
 ```{r}
 # Performing SNP thinning in order to compute PCs
-res <- pcadapt(filename, K = 20, LD.clumping = list(size = 10000, thr = 0.1))
+res <- pcadapt(filename, K = 20, LD.clumping = list(size = 5000, thr = 0.05))
 plot(res, option = "screeplot")
 ```
 
@@ -155,14 +155,21 @@ Size = 50000 -> we still see the cluster regions in PC2 loadings.
 Size = 100000 -> we still see the cluster regions in PC2 loadings.
 
 ```{r}
-res <- pcadapt(filename, K = 4, LD.clumping = list(size = 20000, thr = 0.1))
+res <- pcadapt(filename, K = 4, LD.clumping = list(size = 5000, thr = 0.1))
 par(mfrow = c(2, 2))
 for (i in 1:4)
   plot(res$loadings[, i], pch = 19, cex = .3, ylab = paste0("Loadings PC", i))
 ```
 
 ```{r}
-res <- pcadapt(filename, K = 4, LD.clumping = list(size = 7500, thr = 0.1))
+res <- pcadapt(filename, K = 4, LD.clumping = list(size = 5000, thr = 0.05))
+par(mfrow = c(2, 2))
+for (i in 1:4)
+  plot(res$loadings[, i], pch = 19, cex = .3, ylab = paste0("Loadings PC", i))
+```
+
+```{r}
+res <- pcadapt(filename, K = 4, LD.clumping = list(size = 10000, thr = 0.05))
 par(mfrow = c(2, 2))
 for (i in 1:4)
   plot(res$loadings[, i], pch = 19, cex = .3, ylab = paste0("Loadings PC", i))
@@ -177,7 +184,7 @@ plot(res, option = "manhattan")
 res$singular.values
 ```
 
-Save outliers
+### Save outliers
 
 Choosing a cutoff for outlier detection
 We can be more strict here with alpha = 0.05 as PCAdapt has less assumptions and overpick outliers 
@@ -190,6 +197,201 @@ alpha <- 0.05 #expected false discovery rate lower than 5%
 # Save outliers
 pcadapt.outliers <- which(qval < alpha)
 length(pcadapt.outliers)
+```
+
+Before LD-thinning: 7522 outliers
+
+After LD-thinning:
+Size 5000 / thr 0.1 =  6262 outliers
+Size 10000 / thr 0.1 = 5782
+Size 20000 / thr 0.1 = 5830
+Size 5000 / thr 0.05 = 4407
+Size 10000 / thr 0.05 = 4045
+Size 20000 / thr 0.05 = 4062
+
+```{r}
+# Save outliers to .txt file 
+invisible(lapply(pcadapt.outliers, write, "outliers_pcadapt_thinned.txt", append=TRUE))
+```
+
+Taking the SNP indices and applying chromosome and position info:
+```{bash}
+cd /home/ccaillon/RISG_dDocent_working/RISG_Outlier_Detection_working
+
+cat  outliers_pcadapt_thinned.txt | parallel "grep -w ^{} loci1.plus.index" | cut -f2,3> outliers_pcadapt_thinned.loci.txt
+
+```
+
+
+## 2. OutFLANK
+
+```{r}
+# Load all necessary packages
+library(OutFLANK)  # outflank package
+library(vcfR)
+library(bigsnpr)   # package for Linkage Disequilibrium pruning
+```
+
+```{r}
+# Convert VCF to OutFLANK format
+vcf_OutFLANK <- read.vcfR("SNP.TRSdp5g75mafPM9g9maf1.2A.nDNA.FIL.recode.vcf")
+```
+File attributes:
+  meta lines: 96
+  header_line: 97
+  variant count: 197634
+  column count: 248
+
+```{r}
+geno <- extract.gt(vcf_OutFLANK) # Character matrix containing the genotypes
+position <- getPOS(vcf_OutFLANK) # Positions in bp
+chromosome <- getCHROM(vcf_OutFLANK) # Chromosome information
+
+G <- matrix(NA, nrow = nrow(geno), ncol = ncol(geno))
+
+G[geno %in% c("0/0", "0|0")] <- 0
+G[geno  %in% c("0/1", "1/0", "1|0", "0|1")] <- 1
+G[geno %in% c("1/1", "1|1")] <- 2
+
+# NA should be replaced with “9” to work with the functions in the OutFLANK package
+G[is.na(G)] <- 9
+
+head(G[,1:10])
+```
+```{r}
+# Convert pop designations to a vector
+pop <- as.vector(poplist.names)
+pop
+```
+
+```{r}
+# Calculate FST
+FST_OutFLANK <- MakeDiploidFSTMat(t(G), locusNames = paste0(chromosome,"_", position), popNames = pop)
+head(FST_OutFLANK) # the output will be a table showing Fst statistics for each locus
+```
+
+```{r}
+# Plot heterozygosity vs FST
+plot(FST_OutFLANK$He, FST_OutFLANK$FST)
+```
+FST = 0 -> allele frequencies are identical in all populations (no differentiation).
+FST = 1 -> populations are fixed for different alleles (complete differentiation).
+If high FST SNP, it means one population has a very different allele frequency than another, a signal of local adaptation or drift.
+
+The bulk of SNPs form a "wedge" shape = neutral expectation. OutFLANK fits a chi-squared distribution to the right side (high He SNPs) to model neutral FST, then identifies outliers above the distribution.
+
+```{r}
+# Plot FST vs FSTNoCorr
+plot(FST_OutFLANK$FST, FST_OutFLANK$FSTNoCorr)
+abline(0,1)
+```
+STNoCorr = Fst without sample size correction.
+The line sits just above the diagonal (FSTNoCorr > FST), which is expected -> the uncorrected value is always a bit inflated. The offset is small and uniform, indicating your sampling is well-balanced.
+
+### We need to give OutFLANK a set of quasi-independent SNPs to estimate the neutral FST distribution.
+
+```{r}
+# Load additional packages
+library("dplyr")
+library("stringr")
+```
+
+```{r}
+# Chromosomes need to be of class integer for this to work.
+# Visualizing chromosomes
+chrom_unique <- unique(chromosome)
+print(chrom_unique)
+```
+
+```{r}
+# Removing "NC_" from the chromosome name so it can be converted to an integer
+chrom_new <- chromosome%>%str_replace("NC_","")
+
+# Converting the character string into an integer
+chrom1 <- as.integer(chrom_new)
+```
+
+```{r}
+#chromosome and position need to be sorted for imputation to work.
+chrom_sort <- sort(chrom1)
+pos_sort <- sort(position)
+```
+
+### Note: This filtering program does not allow for missing genotype values.
+
+Using `snp_fastImputeSimple` to impute missing genotypes
+
+```{r}
+# Converting the genotype matrix to class FBM.code256
+G1 <- add_code256(big_copy(t(G),type="raw"),code=bigsnpr:::CODE_012)
+
+# Imputing missing genotypes
+G_missSimple <- snp_fastImputeSimple(G1,method = "mode")
+```
+
+```{r}
+newpc <- snp_autoSVD(G_missSimple, infos.chr = chrom_sort,infos.pos = pos_sort)
+which_pruned <- attr(newpc, which="subset") # Indexes of remaining SNPS after pruning
+length(which_pruned)
+```
+
+### Run the OutFLANK() function to estimate the parameters on the neutral FST distribution.
+
+```{r}
+out_trim <- OutFLANK(FST_OutFLANK[which_pruned,], NumberOfSamples = 239, qthreshold = 0.05, Hmin = 0.1)
+str(out_trim)
+# NumberOfSamples = number of populations? or individuals?
+```
+
+```{r}
+# Check the fit and make sure it looks good, especially in the right tail:
+OutFLANKResultsPlotter(out_trim, withOutliers = TRUE, NoCorr = TRUE, Hmin = 0.1, binwidth = 0.001, Zoom = FALSE, RightZoomFraction = 0.05, titletext = NULL)
+```
+```{r}
+# To inspect closely the right tail, which is the critical part:
+OutFLANKResultsPlotter(out_trim, withOutliers = TRUE, NoCorr = TRUE, Hmin = 0.1, binwidth = 0.005, Zoom = TRUE, RightZoomFraction = 0.05)
+```
+This plot shows a poor fit, the blue curve and orange histogram are misaligned.
+The model is shifted to the left relative to your data -> it underestimates the typical neutral Fst.
+The right tail of the blue curve falls below the orange bars at moderate Fst values (0.1–0.2), meaning OutFLANK will call too many false positives -> SNPs that are just neutrally differentiated will be flagged as outliers.
+
+```{r}
+# Check the p-value histogram
+hist(out_trim$results$pvaluesRightTail)
+```
+
+Under a well-fitted model, neutral SNPs should have uniformly distributed p-values between 0 and 1, with a spike at 0 from true outliers (adaptive SNPs).
+My histogram is roughly uniform across 0–1 with a modest spike at 0 and another bump at 1. This is not ideal!
+The bump at p ≈ 1 is a red flag -> it means many SNPs have extremely high p-values, suggesting the neutral distribution is still shifted too far right relative to the data (model overestimates neutral FST for many SNPs).
+
+```{r}
+# Using estimated neutral mean FST and df to calculate P-values for all loci
+P1 <- pOutlierFinderChiSqNoCorr(my_fst, Fstbar = out_trim$FSTNoCorrbar, dfInferred = out_trim$dfInferred, qthreshold = 0.05, Hmin=0.1)
+```
+
+```{r}
+# Identify outliers SNPs
+my_out <- P1$OutlierFlag==TRUE
+plot(P1$He, P1$FST, pch=19, col=rgb(0,0,0,0.1))
+points(P1$He[my_out], P1$FST[my_out], col="blue")
+```
+
+```{r}
+P1[which(P1$OutlierFlag == TRUE),]
+
+outliers_out <- P1[which(P1$OutlierFlag == TRUE),]
+outliers_out
+```
+
+```{r}
+# This is a bit complicated, but I'm saving the row names (snp numbers) as a column in the dataframe then extracting those values from the table to save to a .txt file 
+out_outliers_list1_8pops <- outliers_out
+out_outliers_list1_8pops$snps <- row.names(out_outliers_list1_8pops)
+out_outliers_8pops <- out_outliers_list1_8pops$snps
+```
+
+```{r}
+invisible(lapply(out_outliers_8pops, write, "outliers_outflank_8pops.txt", append=TRUE))
 ```
 
 
